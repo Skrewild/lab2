@@ -1,15 +1,11 @@
 #!/usr/bin/env python3
 """
-Lab 2 Starter Node (3-node ready)
-Lamport Clock + Replicated Key–Value Store (LWW)
-
+Lab 2 Node — Lamport Clock + Replicated Key-Value Store (LWW)
 Endpoints:
   POST /put        {"key": "...", "value": ...}
   GET  /get?key=...
   POST /replicate  {"key":"...", "value":..., "ts": <lamport>, "origin":"A"}
   GET  /status
-
-Look for '# YOUR CODE HERE' markers for required and optional extensions.
 """
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -25,43 +21,31 @@ lock = threading.Lock()
 LAMPORT = 0
 STORE: Dict[str, Tuple[Any, int, str]] = {}  # key -> (value, ts, origin)
 NODE_ID = ""
-PEERS: List[str] = []  # base URLs, e.g. http://10.0.1.12:8000
+PEERS: List[str] = []  # e.g. http://10.0.1.12:8000
 
-DELAY_RULES = {
-    # Example format:
-    # ("A", "http://10.0.1.13:8002"): 2.0
-}
-# YOUR CODE HERE:
-# Add a delay rule to implement Scenario A (delay A -> C by ~2 seconds).
-
+# Scenario A: delay replication from Node A -> Node C
+DELAY_RULES = {}
 
 def lamport_tick_local() -> int:
     """Increment Lamport clock for a local event and return new value."""
     global LAMPORT
     with lock:
-        # YOUR CODE HERE
+        LAMPORT += 1
         return LAMPORT
-
 
 def lamport_on_receive(received_ts: int) -> int:
-    """On receive: L = max(L, received_ts) + 1. Return new value."""
+    """Update Lamport clock on receiving a message."""
     global LAMPORT
     with lock:
-        # YOUR CODE HERE
+        LAMPORT = max(LAMPORT, received_ts) + 1
         return LAMPORT
 
-
 def get_lamport() -> int:
-    """Return current Lamport clock value."""
     with lock:
         return LAMPORT
 
-
 def apply_lww(key: str, value: Any, ts: int, origin: str) -> bool:
-    """
-    Apply Last-Writer-Wins update using Lamport timestamp.
-    Tie-breaker: origin lexicographic. Returns True if applied.
-    """
+    """Apply Last-Writer-Wins update. Tie-breaker: origin lexicographic."""
     with lock:
         cur = STORE.get(key)
         if cur is None:
@@ -73,25 +57,18 @@ def apply_lww(key: str, value: Any, ts: int, origin: str) -> bool:
             return True
         return False
 
-
 def replicate_to_peers(key: str, value: Any, ts: int, origin: str, retries: int = 2, timeout_s: float = 2.0) -> None:
-    """
-    Send update to all peers via POST /replicate.
-    Where to add code:
-      - Artificial delay to one peer (Scenario A)
-      - Exponential backoff (optional)
-      - Drop simulation (optional)
-    """
+    """Send update to all peers via POST /replicate."""
     payload = json.dumps({"key": key, "value": value, "ts": ts, "origin": origin}).encode("utf-8")
     headers = {"Content-Type": "application/json"}
 
     for peer in PEERS:
         url = peer.rstrip("/") + "/replicate"
 
+        # Apply artificial delay if defined in DELAY_RULES
         delay_s = DELAY_RULES.get((NODE_ID, peer), 0.0)
         if delay_s > 0:
-            # YOUR CODE HERE:
-            # Change how delay is applied to create reordering effects.
+            print(f"[{NODE_ID}] delaying replication to {peer} by {delay_s}s")
             time.sleep(delay_s)
 
         for attempt in range(retries + 1):
@@ -104,15 +81,12 @@ def replicate_to_peers(key: str, value: Any, ts: int, origin: str, retries: int 
                 if attempt == retries:
                     print(f"[{NODE_ID}] WARN replicate failed to {url}: {e}")
                 else:
-                    # YOUR CODE HERE (optional): replace fixed sleep with exponential backoff
                     time.sleep(0.2 * (attempt + 1))
-
 
 class Handler(BaseHTTPRequestHandler):
     """HTTP handler implementing /put, /replicate, /get, /status."""
 
     def _send(self, code: int, obj: Dict[str, Any]) -> None:
-        """Serialize obj as JSON and send to client."""
         data = json.dumps(obj).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
@@ -121,7 +95,6 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
-        """Handle GET /get?key=... and GET /status."""
         if self.path.startswith("/get"):
             qs = parse.urlparse(self.path).query
             params = parse.parse_qs(qs)
@@ -144,7 +117,6 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, {"ok": False, "error": "not found"})
 
     def do_POST(self):
-        """Handle POST /put and POST /replicate."""
         length = int(self.headers.get("Content-Length", "0"))
         raw = self.rfile.read(length) if length > 0 else b"{}"
         try:
@@ -183,9 +155,6 @@ class Handler(BaseHTTPRequestHandler):
             applied = apply_lww(key, value, ts, origin)
             print(f"[{NODE_ID}] RECV replicate key={key} value={value} ts={ts} origin={origin} -> lamport={new_clock} applied={applied}")
 
-            # YOUR CODE HERE (optional):
-            # If you implement vector clocks, merge and detect concurrency here.
-
             self._send(200, {"ok": True, "node": NODE_ID, "lamport": get_lamport(), "applied": applied})
             return
 
@@ -194,9 +163,7 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         return
 
-
 def main():
-    """Parse CLI args, set NODE_ID/PEERS, start HTTP server."""
     global NODE_ID, PEERS, LAMPORT
     parser = argparse.ArgumentParser()
     parser.add_argument("--id", required=True, help="Node ID: A, B, or C")
@@ -209,13 +176,15 @@ def main():
     PEERS = [p.strip() for p in args.peers.split(",") if p.strip()]
     LAMPORT = 0
 
-    # YOUR CODE HERE (optional):
-    # Configure DELAY_RULES based on NODE_ID to implement Scenario A deterministically.
+    # Scenario A: Delay replication A -> C by 2 seconds
+    if NODE_ID == "A":
+        for peer in PEERS:
+            if peer.endswith("8002"):  # Node C port
+                DELAY_RULES[(NODE_ID, peer)] = 2.0
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"[{NODE_ID}] listening on {args.host}:{args.port} peers={PEERS}")
     server.serve_forever()
-
 
 if __name__ == "__main__":
     main()
